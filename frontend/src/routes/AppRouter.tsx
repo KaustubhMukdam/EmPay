@@ -68,6 +68,8 @@ const AppRouter: React.FC = () => {
             <Route path="/employees/:id/edit" element={<EmployeeFormPage />} />
             <Route path="/attendance/my" element={<MyAttendancePage />} />
             <Route path="/leave/my" element={<MyLeavePage />} />
+            <Route path="/payroll/payslips" element={<PayslipListPage />} />
+            <Route path="/payroll/payslips/:id" element={<PayslipDetailPage />} />
           </Route>
         </Route>
 
@@ -90,8 +92,6 @@ const AppRouter: React.FC = () => {
           <Route element={<AppLayout />}>
             <Route path="/leave/approvals" element={<LeaveApprovalsPage />} />
             <Route path="/payroll/run" element={<PayrunPage />} />
-            <Route path="/payroll/payslips" element={<PayslipListPage />} />
-            <Route path="/payroll/payslips/:id" element={<PayslipDetailPage />} />
           </Route>
         </Route>
 

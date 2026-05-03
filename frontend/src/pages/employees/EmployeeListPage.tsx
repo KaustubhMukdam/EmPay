@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Plus, Edit2, Trash2, Eye } from 'lucide-react';
+import { Plus, Edit2, Eye, Trash2 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { employeeApi } from '@/api/employees.api';
-import { Role } from '@/constants/roles';
+import { Role, ROLE_COLORS, ROLE_LABELS } from '@/constants/roles';
 
 /**
  * EmployeeListPage
@@ -24,33 +24,29 @@ const EmployeeListPage: React.FC = () => {
   const navigate = useNavigate();
   const { role } = useAuthStore();
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+
+  // ─── Debounce search input ──────────────────────────────────────────────
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 400);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   // ─── Fetch employees using React Query ───────────────────────────────────
-  // React Query handles: loading, error, caching, refetching
   const { data: employees = [], isLoading, error, refetch } = useQuery({
-    queryKey: ['employees'],
-    queryFn: employeeApi.listEmployees,
+    queryKey: ['employees', debouncedSearch],
+    queryFn: () => employeeApi.listEmployees({ q: debouncedSearch || undefined, limit: 100 }),
   });
 
-  // ─── Filter employees based on search ────────────────────────────────────
-  const filteredEmployees = employees.filter(emp =>
-    emp.employee_code?.toLowerCase().includes(search.toLowerCase()) ||
-    emp.department?.toLowerCase().includes(search.toLowerCase()) ||
-    emp.designation?.toLowerCase().includes(search.toLowerCase())
-  );
-
-  // ─── Check if user has edit permissions ──────────────────────────────────
+  const displayEmployees = employees;
+  // ─── Check role permissions ───────────────────────────────────────────────
   const canEdit = role === Role.ADMIN || role === Role.HR_OFFICER;
+  const canDelete = role === Role.ADMIN;
 
-  // ─── Handle delete ───────────────────────────────────────────────────────
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this employee?')) return;
-    try {
-      await employeeApi.deleteEmployee(id);
-      refetch(); // Refresh list after delete
-    } catch (err) {
-      alert('Failed to delete employee');
-    }
+  const getRoleBadgeClass = (value?: string) => {
+    if (!value) return 'badge badge-neutral';
+    if (value in ROLE_COLORS) return `badge ${ROLE_COLORS[value as Role]}`;
+    return 'badge badge-neutral';
   };
 
   return (
@@ -93,7 +89,7 @@ const EmployeeListPage: React.FC = () => {
       )}
 
       {/* Empty state */}
-      {!isLoading && !error && filteredEmployees.length === 0 && (
+      {!isLoading && !error && displayEmployees.length === 0 && (
         <div className="card" style={{ textAlign: 'center', padding: 40 }}>
           <p style={{ color: '#64748B', marginBottom: 16 }}>No employees found.</p>
           {canEdit && (
@@ -108,21 +104,22 @@ const EmployeeListPage: React.FC = () => {
       )}
 
       {/* Table */}
-      {!isLoading && !error && filteredEmployees.length > 0 && (
+      {!isLoading && !error && displayEmployees.length > 0 && (
         <div className="card" style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid #E2E8F0', background: '#F8FAFC' }}>
                 <th style={{ padding: 12, textAlign: 'left', fontWeight: 600, color: '#0F172A' }}>Employee Code</th>
+                <th style={{ padding: 12, textAlign: 'left', fontWeight: 600, color: '#0F172A' }}>Name</th>
                 <th style={{ padding: 12, textAlign: 'left', fontWeight: 600, color: '#0F172A' }}>Department</th>
                 <th style={{ padding: 12, textAlign: 'left', fontWeight: 600, color: '#0F172A' }}>Designation</th>
-                <th style={{ padding: 12, textAlign: 'left', fontWeight: 600, color: '#0F172A' }}>DOJ</th>
-                <th style={{ padding: 12, textAlign: 'left', fontWeight: 600, color: '#0F172A' }}>Status</th>
+                <th style={{ padding: 12, textAlign: 'left', fontWeight: 600, color: '#0F172A' }}>Role</th>
+
                 {(canEdit) && <th style={{ padding: 12, textAlign: 'center', fontWeight: 600, color: '#0F172A' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
-              {filteredEmployees.map((emp, idx) => (
+              {displayEmployees.map((emp, idx) => (
                 <tr
                   key={emp.id}
                   style={{
@@ -131,27 +128,18 @@ const EmployeeListPage: React.FC = () => {
                   }}
                 >
                   <td style={{ padding: 12, color: '#0F172A' }}>{emp.employee_code || '—'}</td>
+                  <td style={{ padding: 12, color: '#0F172A' }}>{emp.name || '—'}</td>
                   <td style={{ padding: 12, color: '#0F172A' }}>{emp.department || '—'}</td>
                   <td style={{ padding: 12, color: '#0F172A' }}>{emp.designation || '—'}</td>
+                  <td style={{ padding: 12 }}>
+                    <span className={getRoleBadgeClass(emp.role)}>
+                      {emp.role && emp.role in ROLE_LABELS ? ROLE_LABELS[emp.role as Role] : '—'}
+                    </span>
+                  </td>
                   <td style={{ padding: 12, color: '#64748B' }}>
                     {emp.date_of_joining
                       ? new Date(emp.date_of_joining).toLocaleDateString('en-IN')
                       : '—'}
-                  </td>
-                  <td style={{ padding: 12 }}>
-                    <span
-                      style={{
-                        display: 'inline-block',
-                        padding: '4px 12px',
-                        borderRadius: 4,
-                        fontSize: 12,
-                        fontWeight: 500,
-                        background: emp.is_active ? '#DCFCE7' : '#FEE2E2',
-                        color: emp.is_active ? '#15803D' : '#991B1B',
-                      }}
-                    >
-                      {emp.is_active ? 'Active' : 'Inactive'}
-                    </span>
                   </td>
                   {canEdit && (
                     <td style={{ padding: 12, textAlign: 'center' }}>
@@ -186,21 +174,31 @@ const EmployeeListPage: React.FC = () => {
                         >
                           <Edit2 size={16} />
                         </button>
-                        <button
-                          onClick={() => handleDelete(emp.id)}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            color: '#EF4444',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 4,
-                          }}
-                          title="Delete"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                        {canDelete && (
+                          <button
+                            onClick={async () => {
+                              if (!window.confirm('Are you sure you want to delete this employee?')) return;
+                              try {
+                                await employeeApi.deleteEmployee(emp.id);
+                                refetch();
+                              } catch {
+                                alert('Failed to delete employee');
+                              }
+                            }}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              color: '#EF4444',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                            title="Delete"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   )}

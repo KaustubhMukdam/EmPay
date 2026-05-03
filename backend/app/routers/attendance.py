@@ -2,7 +2,7 @@
 import uuid
 import calendar
 from typing import List, Optional
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
@@ -17,6 +17,13 @@ router = APIRouter()
 
 ALL_ROLES = [Role.ADMIN, Role.HR_OFFICER, Role.PAYROLL_OFFICER, Role.EMPLOYEE]
 MANAGER_ROLES = [Role.ADMIN, Role.HR_OFFICER, Role.PAYROLL_OFFICER]
+
+
+def _as_utc(dt: datetime) -> datetime:
+    # Backward compatibility: old rows may have naive timestamps.
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _get_employee_for_user(user_id: uuid.UUID, session: Session) -> Employee:
@@ -47,7 +54,7 @@ def check_in(
     else:
         record = Attendance(employee_id=emp.id, date=today)
 
-    record.check_in = datetime.utcnow()
+    record.check_in = datetime.now(timezone.utc)
     record.status = AttendanceStatus.PRESENT
     session.add(record)
     session.commit()
@@ -73,8 +80,10 @@ def check_out(
     if record.check_out:
         raise HTTPException(status_code=409, detail="Already checked out today")
 
-    record.check_out = datetime.utcnow()
-    delta = (record.check_out - record.check_in).total_seconds() / 3600
+    record.check_out = datetime.now(timezone.utc)
+    check_in_utc = _as_utc(record.check_in)
+    check_out_utc = _as_utc(record.check_out)
+    delta = (check_out_utc - check_in_utc).total_seconds() / 3600
     record.working_hours = round(delta, 2)
     if delta < 4:
         record.status = AttendanceStatus.HALF_DAY

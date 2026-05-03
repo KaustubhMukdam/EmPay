@@ -37,6 +37,19 @@ export interface LeaveRequestCreate {
   reason?: string;
 }
 
+export interface LeaveTypeCreate {
+  name: string;
+  is_paid: boolean;
+  max_days: number;
+}
+
+export interface LeaveAllocationCreate {
+  employee_id: string;
+  leave_type_id: string;
+  year: number;
+  total_days: number;
+}
+
 export const LEAVE_STATUS_LABELS: Record<LeaveStatus, string> = {
   pending: 'Pending',
   approved: 'Approved',

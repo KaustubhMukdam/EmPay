@@ -33,9 +33,14 @@ def calculate_payslip(
     """
     gross = basic + hra + other_allowances
     pf_deduction = round(basic * pf_rate, 2)
-    per_day_basic = basic / total_working_days if total_working_days > 0 else 0.0
-    leave_deduction = round(per_day_basic * unpaid_leave_days, 2)
-    net_pay = round(gross - pf_deduction - prof_tax - leave_deduction, 2)
+    
+    # Standard practice: Leave deduction is based on Gross Salary
+    per_day_gross = gross / total_working_days if total_working_days > 0 else 0.0
+    leave_deduction = round(per_day_gross * unpaid_leave_days, 2)
+    
+    # Calculate Net Pay and ensure it doesn't go below zero
+    net_pay_raw = gross - pf_deduction - prof_tax - leave_deduction
+    net_pay = round(max(0, net_pay_raw), 2)
 
     return PayslipResult(
         basic=basic,

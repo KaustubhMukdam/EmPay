@@ -19,6 +19,7 @@ app.add_middleware(
         settings.FRONTEND_URL,
         "http://localhost:5173",   # Vite dev server
         "http://localhost:4173",   # Vite preview
+        "http://localhost:5174",   # Alternate Vite dev server
     ],
     allow_credentials=True,
     allow_methods=["*"],

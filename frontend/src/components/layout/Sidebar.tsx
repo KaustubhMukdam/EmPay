@@ -25,7 +25,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/leave/manage',    icon: <Calendar size={18} />,        label: 'Leave Management',  roles: [Role.ADMIN, Role.HR_OFFICER] },
   { to: '/leave/approvals', icon: <Calendar size={18} />,        label: 'Leave Approvals',   roles: [Role.ADMIN, Role.PAYROLL_OFFICER] },
   { to: '/payroll/run',     icon: <DollarSign size={18} />,      label: 'Payroll',           roles: [Role.ADMIN, Role.PAYROLL_OFFICER] },
-  { to: '/payroll/payslips',icon: <FileText size={18} />,        label: 'Payslips',          roles: [Role.ADMIN, Role.PAYROLL_OFFICER] },
+  { to: '/payroll/payslips',icon: <FileText size={18} />,        label: 'Payslips',          roles: [Role.ADMIN, Role.PAYROLL_OFFICER, Role.EMPLOYEE] },
 ];
 
 const Sidebar: React.FC = () => {

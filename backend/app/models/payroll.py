@@ -108,3 +108,5 @@ class PayslipRead(SQLModel):
     days_on_leave: int
     unpaid_days: int
     created_at: datetime
+    payrun_month: int = 0
+    payrun_year: int = 0

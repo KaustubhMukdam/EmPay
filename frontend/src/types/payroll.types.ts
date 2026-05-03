@@ -37,6 +37,8 @@ export interface Payslip {
   days_on_leave: number;
   unpaid_days: number;
   created_at: string;
+  payrun_month: number;
+  payrun_year: number;
 }
 
 export const MONTH_NAMES = [

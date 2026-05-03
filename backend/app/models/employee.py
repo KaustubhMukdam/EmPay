@@ -2,6 +2,7 @@ import uuid
 from typing import Optional
 from datetime import date, datetime
 from sqlmodel import Field, SQLModel
+from app.models.user import Role
 
 
 class Employee(SQLModel, table=True):
@@ -46,3 +47,9 @@ class EmployeeRead(SQLModel):
     manager_id: Optional[uuid.UUID]
     is_active: bool
     created_at: datetime
+
+
+class EmployeeWithUserRead(EmployeeRead):
+    name: str
+    email: str
+    role: Role

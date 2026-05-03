@@ -1,14 +1,16 @@
 """Analytics router — role-aware dashboard data"""
-from datetime import date
-from fastapi import APIRouter, Depends, Query
+from datetime import date, timedelta
+import calendar
+from fastapi import APIRouter, Depends, Query, HTTPException
+from pydantic import BaseModel
 from sqlmodel import Session, select, func
 
 from app.database import get_session
 from app.models.user import User, Role
 from app.models.employee import Employee
 from app.models.attendance import Attendance, AttendanceStatus
-from app.models.leave import LeaveRequest, LeaveStatus, LeaveType
-from app.models.payroll import Payrun, Payslip, PayrunStatus
+from app.models.leave import LeaveRequest, LeaveStatus, LeaveType, LeaveAllocation
+from app.models.payroll import Payrun, PayrunStatus
 from app.dependencies.auth import get_current_user
 from app.dependencies.roles import require_role
 
@@ -17,117 +19,220 @@ router = APIRouter()
 ALL_ROLES = [Role.ADMIN, Role.HR_OFFICER, Role.PAYROLL_OFFICER, Role.EMPLOYEE]
 
 
-@router.get("/dashboard")
-def dashboard(
+# Pydantic models for responses
+class AdminAnalytics(BaseModel):
+    total_employees: int
+    present_today: int
+    half_day_today: int
+    pending_leaves: int
+    payroll_due_month: int | None
+    payroll_due_year: int | None
+    processed_payruns: int
+    total_payslips: int
+
+
+class WeeklyAttendance(BaseModel):
+    week_label: str
+    present: int
+    absent: int
+    half_day: int
+    on_leave: int
+
+
+class AttendanceMonthlyResponse(BaseModel):
+    weeks: list[WeeklyAttendance]
+
+
+class LeaveDistributionItem(BaseModel):
+    leave_type: str
+    count: int
+
+
+class LeaveDistributionResponse(BaseModel):
+    distribution: list[LeaveDistributionItem]
+
+
+class EmployeeSummary(BaseModel):
+    total_working_days: int
+    present: int
+    absent: int
+    half_day: int
+    on_leave: int
+    check_in_today: bool
+    leave_balance: dict
+
+
+# Endpoints
+@router.get("/admin", response_model=AdminAnalytics)
+def get_admin_analytics(
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role(ALL_ROLES)),
+    current_user: User = Depends(require_role([Role.ADMIN, Role.HR_OFFICER, Role.PAYROLL_OFFICER])),
 ):
+    """Get admin dashboard analytics"""
     today = date.today()
-    role = current_user.role
+    
+    total_employees = session.exec(
+        select(func.count(Employee.id)).where(Employee.is_active == True)
+    ).one() or 0
+    
+    present_today = session.exec(
+        select(func.count(Attendance.id)).where(
+            Attendance.date == today,
+            Attendance.status == AttendanceStatus.PRESENT,
+        )
+    ).one() or 0
 
-    if role == Role.ADMIN or role == Role.HR_OFFICER:
-        total_employees = len(session.exec(select(Employee).where(Employee.is_active == True)).all())
-        today_present = len(session.exec(
-            select(Attendance).where(
-                Attendance.date == today,
-                Attendance.status == AttendanceStatus.PRESENT,
-            )
-        ).all())
-        pending_leaves = len(session.exec(
-            select(LeaveRequest).where(LeaveRequest.status == LeaveStatus.PENDING)
-        ).all())
-        last_payrun = session.exec(
-            select(Payrun).where(Payrun.status == PayrunStatus.PROCESSED)
-        ).first()
-        return {
-            "role": role.value,
-            "total_employees": total_employees,
-            "today_present": today_present,
-            "pending_leaves": pending_leaves,
-            "last_payrun": last_payrun.month if last_payrun else None,
-        }
+    half_day_today = session.exec(
+        select(func.count(Attendance.id)).where(
+            Attendance.date == today,
+            Attendance.status == AttendanceStatus.HALF_DAY,
+        )
+    ).one() or 0
+    
+    pending_leaves = session.exec(
+        select(func.count(LeaveRequest.id)).where(LeaveRequest.status == LeaveStatus.PENDING)
+    ).one() or 0
 
-    elif role == Role.PAYROLL_OFFICER:
-        pending_leaves = len(session.exec(
-            select(LeaveRequest).where(LeaveRequest.status == LeaveStatus.PENDING)
-        ).all())
-        payruns = session.exec(select(Payrun)).all()
-        payslip_count = len(session.exec(select(Payslip)).all())
-        return {
-            "role": role.value,
-            "pending_leaves": pending_leaves,
-            "total_payruns": len(payruns),
-            "payslip_count": payslip_count,
-        }
+    processed_payruns = session.exec(
+        select(func.count(Payrun.id)).where(Payrun.status == PayrunStatus.PROCESSED)
+    ).one() or 0
 
-    else:  # Employee
-        emp = session.exec(
-            select(Employee).where(Employee.user_id == current_user.id)
-        ).first()
-        if not emp:
-            return {"role": role.value, "error": "Employee record not found"}
-
-        month = today.month
-        year = today.year
-        monthly_att = session.exec(
-            select(Attendance).where(
-                Attendance.employee_id == emp.id,
-            )
-        ).all()
-        monthly_att = [r for r in monthly_att if r.date.month == month and r.date.year == year]
-
-        return {
-            "role": role.value,
-            "days_present": sum(1 for r in monthly_att if r.status == AttendanceStatus.PRESENT),
-            "days_on_leave": sum(1 for r in monthly_att if r.status == AttendanceStatus.ON_LEAVE),
-            "days_absent": sum(1 for r in monthly_att if r.status == AttendanceStatus.ABSENT),
-            "today_checked_in": any(r.date == today and r.check_in for r in monthly_att),
-        }
+    from app.models.payroll import Payslip
+    total_payslips = session.exec(select(func.count(Payslip.id))).one() or 0
+    
+    due_payrun = session.exec(
+        select(Payrun)
+        .where(Payrun.status != PayrunStatus.PROCESSED)
+        .order_by(Payrun.year.desc(), Payrun.month.desc())
+    ).first()
+    
+    return AdminAnalytics(
+        total_employees=total_employees,
+        present_today=present_today,
+        half_day_today=half_day_today,
+        pending_leaves=pending_leaves,
+        payroll_due_month=due_payrun.month if due_payrun else None,
+        payroll_due_year=due_payrun.year if due_payrun else None,
+        processed_payruns=processed_payruns,
+        total_payslips=total_payslips,
+    )
 
 
-@router.get("/attendance-monthly")
-def attendance_monthly(
+@router.get("/monthly-attendance", response_model=AttendanceMonthlyResponse)
+def get_monthly_attendance(
     month: int = Query(..., ge=1, le=12),
     year: int = Query(...),
     session: Session = Depends(get_session),
     current_user: User = Depends(require_role([Role.ADMIN, Role.HR_OFFICER, Role.PAYROLL_OFFICER])),
 ):
-    records = session.exec(select(Attendance)).all()
-    monthly = [r for r in records if r.date.month == month and r.date.year == year]
+    """Get weekly attendance breakdown for a month"""
+    month_start = date(year, month, 1)
+    month_end = date(year, month, calendar.monthrange(year, month)[1])
+    
+    records = session.exec(
+        select(Attendance).where(
+            Attendance.date >= month_start,
+            Attendance.date <= month_end,
+        )
+    ).all()
     
     # Group by week
-    from datetime import timedelta
-    import calendar
-    start = date(year, month, 1)
-    end = date(year, month, calendar.monthrange(year, month)[1])
-    
-    weeks = []
-    week_start = start
-    while week_start <= end:
-        week_end = min(week_start + timedelta(days=6), end)
-        week_records = [r for r in monthly if week_start <= r.date <= week_end]
-        weeks.append({
-            "week": f"{week_start.strftime('%b %d')}–{week_end.strftime('%d')}",
-            "present": sum(1 for r in week_records if r.status == AttendanceStatus.PRESENT),
-            "absent": sum(1 for r in week_records if r.status == AttendanceStatus.ABSENT),
-            "on_leave": sum(1 for r in week_records if r.status == AttendanceStatus.ON_LEAVE),
-        })
+    weekly_data = []
+    week_start = month_start
+    while week_start <= month_end:
+        week_end = min(week_start + timedelta(days=6), month_end)
+        week_records = [r for r in records if week_start <= r.date <= week_end]
+        
+        weekly_data.append(WeeklyAttendance(
+            week_label=f"{week_start.strftime('%b %d')}–{week_end.strftime('%d')}",
+            present=sum(1 for r in week_records if r.status == AttendanceStatus.PRESENT),
+            absent=sum(1 for r in week_records if r.status == AttendanceStatus.ABSENT),
+            half_day=sum(1 for r in week_records if r.status == AttendanceStatus.HALF_DAY),
+            on_leave=sum(1 for r in week_records if r.status == AttendanceStatus.ON_LEAVE),
+        ))
         week_start += timedelta(days=7)
-    return {"weeks": weeks}
+    
+    return AttendanceMonthlyResponse(weeks=weekly_data)
 
 
-@router.get("/leave-distribution")
-def leave_distribution(
+@router.get("/leave-distribution", response_model=LeaveDistributionResponse)
+def get_leave_distribution(
     session: Session = Depends(get_session),
     current_user: User = Depends(require_role([Role.ADMIN, Role.HR_OFFICER])),
 ):
+    """Get distribution of approved leaves by type (top 12 most used)"""
     leave_types = session.exec(select(LeaveType)).all()
     requests = session.exec(
         select(LeaveRequest).where(LeaveRequest.status == LeaveStatus.APPROVED)
     ).all()
     
+    # Build distribution only for leave types with approved requests
     distribution = []
     for lt in leave_types:
         count = sum(1 for r in requests if r.leave_type_id == lt.id)
-        distribution.append({"leave_type": lt.name, "count": count})
-    return {"distribution": distribution}
+        if count > 0:  # Only include types with actual approvals
+            distribution.append(LeaveDistributionItem(leave_type=lt.name, count=count))
+    
+    # Sort by count descending and limit to top 12 for readability
+    distribution.sort(key=lambda x: x.count, reverse=True)
+    distribution = distribution[:12]
+    
+    return LeaveDistributionResponse(distribution=distribution)
+
+
+@router.get("/employee-summary", response_model=EmployeeSummary)
+def get_employee_summary(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_role([Role.EMPLOYEE])),
+):
+    """Get employee's own dashboard summary"""
+    today = date.today()
+    
+    emp = session.exec(
+        select(Employee).where(Employee.user_id == current_user.id)
+    ).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee record not found")
+    
+    # Current month attendance
+    month_start = date(today.year, today.month, 1)
+    month_end = date(today.year, today.month, calendar.monthrange(today.year, today.month)[1])
+    
+    monthly_records = session.exec(
+        select(Attendance).where(
+            Attendance.employee_id == emp.id,
+            Attendance.date >= month_start,
+            Attendance.date <= month_end,
+        )
+    ).all()
+    
+    # Working days in month (exclude weekends)
+    working_days = sum(1 for day in range(1, calendar.monthrange(today.year, today.month)[1] + 1)
+                       if date(today.year, today.month, day).weekday() < 5)
+    
+    # Leave balance
+    balances = session.exec(
+        select(LeaveAllocation).where(
+            LeaveAllocation.employee_id == emp.id,
+            LeaveAllocation.year == today.year,
+        )
+    ).all()
+
+    leave_type_names = {
+        leave_type.id: leave_type.name
+        for leave_type in session.exec(select(LeaveType)).all()
+    }
+    leave_balance_dict = {
+        leave_type_names.get(balance.leave_type_id, str(balance.leave_type_id)): balance.total_days - balance.used_days
+        for balance in balances
+    }
+    
+    return EmployeeSummary(
+        total_working_days=working_days,
+        present=sum(1 for r in monthly_records if r.status == AttendanceStatus.PRESENT),
+        absent=sum(1 for r in monthly_records if r.status == AttendanceStatus.ABSENT),
+        half_day=sum(1 for r in monthly_records if r.status == AttendanceStatus.HALF_DAY),
+        on_leave=sum(1 for r in monthly_records if r.status == AttendanceStatus.ON_LEAVE),
+        check_in_today=any(r.date == today and r.check_in for r in monthly_records),
+        leave_balance=leave_balance_dict,
+    )

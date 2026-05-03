@@ -107,6 +107,24 @@ def apply_for_leave(
         raise HTTPException(status_code=400, detail="Invalid date range")
 
     # Check leave balance
+    if payload.to_date < payload.from_date:
+        raise HTTPException(status_code=400, detail="To date cannot be before from date")
+
+    # Check for overlapping requests (PENDING or APPROVED)
+    overlap = session.exec(
+        select(LeaveRequest).where(
+            LeaveRequest.employee_id == emp.id,
+            LeaveRequest.status.in_([LeaveStatus.PENDING, LeaveStatus.APPROVED]),
+            LeaveRequest.to_date >= payload.from_date,
+            LeaveRequest.from_date <= payload.to_date,
+        )
+    ).first()
+    if overlap:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Overlapping leave request found ({overlap.from_date} to {overlap.to_date})"
+        )
+
     current_year = payload.from_date.year
     alloc = session.exec(
         select(LeaveAllocation).where(
@@ -155,6 +173,12 @@ def approve_leave(
     req = session.get(LeaveRequest, request_id)
     if not req:
         raise HTTPException(status_code=404, detail="Leave request not found")
+    
+    # Self-approval check
+    emp = _get_employee_for_user(current_user.id, session)
+    if req.employee_id == emp.id:
+        raise HTTPException(status_code=400, detail="You cannot approve your own leave request")
+
     if req.status != LeaveStatus.PENDING:
         raise HTTPException(status_code=400, detail="Request is not pending")
 
@@ -211,6 +235,12 @@ def reject_leave(
     req = session.get(LeaveRequest, request_id)
     if not req:
         raise HTTPException(status_code=404, detail="Leave request not found")
+    
+    # Self-rejection check
+    emp = _get_employee_for_user(current_user.id, session)
+    if req.employee_id == emp.id:
+        raise HTTPException(status_code=400, detail="You cannot reject your own leave request")
+
     if req.status != LeaveStatus.PENDING:
         raise HTTPException(status_code=400, detail="Request is not pending")
 

@@ -1,5 +1,5 @@
 """Auth router — /auth/register, /auth/login, /auth/me"""
-from datetime import timedelta
+from datetime import timedelta, date
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
@@ -22,11 +22,15 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
+from app.models.employee import Employee
+import random
+
 @router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
 def register(payload: UserCreate, session: Session = Depends(get_session)):
     existing = session.exec(select(User).where(User.email == payload.email)).first()
     if existing:
         raise HTTPException(status_code=409, detail="Email already registered")
+    
     user = User(
         name=payload.name,
         email=payload.email,
@@ -34,6 +38,20 @@ def register(payload: UserCreate, session: Session = Depends(get_session)):
         role=payload.role,
     )
     session.add(user)
+    session.flush() # Get user.id
+
+    # If registering as an employee, create the skeleton employee record
+    if payload.role == Role.EMPLOYEE:
+        emp_code = f"EMP{random.randint(10000, 99999)}"
+        emp = Employee(
+            user_id=user.id,
+            employee_code=emp_code,
+            date_of_joining=timedelta(days=0) + date.today(), # Just today
+            department="Unassigned",
+            designation="New Employee"
+        )
+        session.add(emp)
+
     session.commit()
     session.refresh(user)
     return user

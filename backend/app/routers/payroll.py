@@ -1,7 +1,7 @@
 """Payroll router — salary config, payruns, payslips"""
 import uuid
 import calendar
-from typing import List
+from typing import List, Optional
 from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
@@ -116,39 +116,52 @@ def create_payrun(
             select(SalaryConfig).where(SalaryConfig.employee_id == emp.id)
         ).first()
         if not config:
-            continue  # skip employees without salary config
+            print(f"Skipping employee {emp.employee_code}: No salary config found")
+            continue
 
-        # Count attendance for this month
-        att_records = session.exec(
+        # Count attendance for this month - OPTIMIZED: Filter by date in SQL
+        month_start = date(payload.year, payload.month, 1)
+        _, last_day = calendar.monthrange(payload.year, payload.month)
+        month_end = date(payload.year, payload.month, last_day)
+
+        monthly_att = session.exec(
             select(Attendance).where(
                 Attendance.employee_id == emp.id,
+                Attendance.date >= month_start,
+                Attendance.date <= month_end,
             )
         ).all()
-        monthly_att = [
-            r for r in att_records
-            if r.date.month == payload.month and r.date.year == payload.year
-        ]
+        
+        # Handling Half-Days (0.5 present)
         days_present = sum(1 for r in monthly_att if r.status == AttendanceStatus.PRESENT)
+        days_half_day = sum(1 for r in monthly_att if r.status == AttendanceStatus.HALF_DAY)
         days_on_leave = sum(1 for r in monthly_att if r.status == AttendanceStatus.ON_LEAVE)
+        
+        # Effective present days
+        effective_present = days_present + (days_half_day * 0.5)
 
         # Determine paid vs unpaid leave days
         approved_requests = session.exec(
             select(LeaveRequest).where(
                 LeaveRequest.employee_id == emp.id,
                 LeaveRequest.status == LeaveStatus.APPROVED,
+                LeaveRequest.to_date >= month_start,
+                LeaveRequest.from_date <= month_end,
             )
         ).all()
         
-        unpaid_leave_days = 0
+        unpaid_leave_days = 0.0
         for req in approved_requests:
             lt = session.get(LeaveType, req.leave_type_id)
             if lt and not lt.is_paid:
-                # Count only days in this month
-                from_d = max(req.from_date, date(payload.year, payload.month, 1))
-                to_d = min(req.to_date, date(payload.year, payload.month, 
-                           calendar.monthrange(payload.year, payload.month)[1]))
+                from_d = max(req.from_date, month_start)
+                to_d = min(req.to_date, month_end)
                 if from_d <= to_d:
                     unpaid_leave_days += (to_d - from_d).days + 1
+        
+        # Add half-day unpaid portion if no corresponding leave request
+        # (Simplified: if you are half-day and didn't apply for half-day paid leave, it's 0.5 unpaid)
+        unpaid_leave_days += (days_half_day * 0.5)
 
         result = calculate_payslip(
             basic=config.basic,
@@ -172,7 +185,7 @@ def create_payrun(
             leave_deduction=result.leave_deduction,
             net_pay=result.net_pay,
             working_days=working_days,
-            days_present=days_present,
+            days_present=effective_present,
             days_on_leave=days_on_leave,
             unpaid_days=unpaid_leave_days,
         )
@@ -188,32 +201,80 @@ def create_payrun(
 
 # ─── Payslips ──────────────────────────────────────────────────────────────────
 
+@router.get("/payslips", response_model=List[PayslipRead])
+def list_payslips(
+    employee_id: Optional[uuid.UUID] = None,
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    # Role-based access control
+    if current_user.role == Role.EMPLOYEE:
+        emp = session.exec(
+            select(Employee).where(Employee.user_id == current_user.id)
+        ).first()
+        if not emp:
+            raise HTTPException(status_code=403, detail="Employee record not found")
+        
+        # Employees can only see their own payslips
+        if employee_id and employee_id != emp.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+        employee_id = emp.id
+
+    # Build query
+    statement = select(Payslip)
+    if employee_id:
+        statement = statement.where(Payslip.employee_id == employee_id)
+    
+    if month or year:
+        payrun_stmt = select(Payrun.id)
+        if month:
+            payrun_stmt = payrun_stmt.where(Payrun.month == month)
+        if year:
+            payrun_stmt = payrun_stmt.where(Payrun.year == year)
+        
+        payrun_ids = session.exec(payrun_stmt).all()
+        statement = statement.where(Payslip.payrun_id.in_(payrun_ids))
+
+    payslips_raw = session.exec(statement).all()
+
+    # Enrich payslips with payrun month/year
+    result = []
+    for ps in payslips_raw:
+        payrun = session.get(Payrun, ps.payrun_id)
+        ps_dict = ps.dict()
+        ps_dict["payrun_month"] = payrun.month if payrun else 0
+        ps_dict["payrun_year"] = payrun.year if payrun else 0
+        result.append(PayslipRead(**ps_dict))
+    
+    return result
+
+
 @router.get("/payslips/{employee_id}", response_model=List[PayslipRead])
 def get_payslips_for_employee(
     employee_id: uuid.UUID,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
-    # Employees can only see their own payslips
-    if current_user.role == Role.EMPLOYEE:
-        emp = session.exec(
-            select(Employee).where(Employee.user_id == current_user.id)
-        ).first()
-        if not emp or emp.id != employee_id:
-            raise HTTPException(status_code=403, detail="Access denied")
-
-    return session.exec(
-        select(Payslip).where(Payslip.employee_id == employee_id)
-    ).all()
+    return list_payslips(employee_id=employee_id, session=session, current_user=current_user)
 
 
 @router.get("/payslips/detail/{payslip_id}", response_model=PayslipRead)
 def get_payslip_detail(
     payslip_id: uuid.UUID,
     session: Session = Depends(get_session),
-    current_user: User = Depends(require_role(PAYROLL_ROLES)),
+    current_user: User = Depends(get_current_user),
 ):
     payslip = session.get(Payslip, payslip_id)
     if not payslip:
         raise HTTPException(status_code=404, detail="Payslip not found")
+    
+    # RBAC check
+    if current_user.role not in PAYROLL_ROLES:
+        # If not Admin/Payroll, must be the owner
+        emp = session.exec(select(Employee).where(Employee.user_id == current_user.id)).first()
+        if not emp or payslip.employee_id != emp.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+            
     return payslip

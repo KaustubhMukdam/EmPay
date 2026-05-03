@@ -1,6 +1,9 @@
 export interface Employee {
   id: string;
   user_id: string;
+  name?: string;
+  email?: string;
+  role?: string;
   department: string | null;
   designation: string | null;
   date_of_joining: string | null;
@@ -13,6 +16,13 @@ export interface Employee {
 export interface EmployeeWithUser extends Employee {
   name: string;
   email: string;
+}
+
+export interface AvailableUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
 }
 
 export interface EmployeeCreate {

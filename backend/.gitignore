@@ -3,3 +3,5 @@ tests
 __pycache__
 .env
 seed.py
+scratch
+seed_bulk.py

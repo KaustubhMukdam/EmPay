@@ -41,9 +41,8 @@ const EmployeeDetailPage: React.FC = () => {
 
       <div className="card" style={{ maxWidth: 600 }}>
         <div style={{ display: 'grid', gap: 20 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+          <div>
             <DetailField label="Employee Code" value={employee.employee_code} />
-            <DetailField label="Status" value={employee.is_active ? 'Active' : 'Inactive'} color={employee.is_active ? '#10B981' : '#EF4444'} />
           </div>
           <DetailField label="Department" value={employee.department} />
           <DetailField label="Designation" value={employee.designation} />

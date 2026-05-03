@@ -1,5 +1,6 @@
 import apiClient from '@/api';
-import type { Employee, EmployeeCreate, EmployeeUpdate } from '@/types/employee.types';
+import { Role } from '@/constants/roles';
+import type { AvailableUser, Employee, EmployeeCreate, EmployeeUpdate } from '@/types/employee.types';
 
 /**
  * Employee API service
@@ -11,8 +12,8 @@ export const employeeApi = {
    * Fetch all employees
    * Accessible by: Admin, HR Officer, Payroll Officer, Employee (read-only)
    */
-  listEmployees: async (): Promise<Employee[]> => {
-    const res = await apiClient.get<Employee[]>('/employees');
+  listEmployees: async (params?: { q?: string; limit?: number; offset?: number }): Promise<Employee[]> => {
+    const res = await apiClient.get<Employee[]>('/employees', { params });
     return res.data;
   },
 
@@ -42,6 +43,19 @@ export const employeeApi = {
    */
   updateEmployee: async (id: string, payload: EmployeeUpdate): Promise<Employee> => {
     const res = await apiClient.put<Employee>(`/employees/${id}`, payload);
+    return res.data;
+  },
+
+  /**
+   * Update the linked user's role for an employee.
+   * Accessible by: Admin only
+   */
+  updateUserRole: async (userId: string, role: Role): Promise<void> => {
+    await apiClient.post(`/users/${userId}/role`, { role });
+  },
+
+  listAvailableUsers: async (params?: { q?: string; limit?: number; offset?: number }): Promise<AvailableUser[]> => {
+    const res = await apiClient.get<AvailableUser[]>('/employees/lookup/available-users', { params });
     return res.data;
   },
 
